@@ -10,12 +10,11 @@ It keeps global lifetime totals:
 - `added`: characters inserted
 - `deleted`: characters removed
 - `net`: `added - deleted`
-- `abs`: `added + deleted`
 
-The statusline text shows `net/abs`, for example:
+The statusline text shows `net`, for example:
 
 ```text
-LOC +123/456
+LOC +123
 ```
 
 ## Install
@@ -121,7 +120,6 @@ require("loc").stats()
   added = 123,
   deleted = 45,
   net = 78,
-  abs = 168,
 }
 ```
 

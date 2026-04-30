@@ -19,11 +19,10 @@ end, { desc = "Reset loc.nvim character counters" })
 vim.api.nvim_create_user_command("LocStats", function()
   local stats = require("loc").stats()
   local message = string.format(
-    "LOC added=%d deleted=%d net=%+d abs=%d",
+    "LOC added=%d deleted=%d net=%+d",
     stats.added,
     stats.deleted,
-    stats.net,
-    stats.abs
+    stats.net
   )
 
   vim.notify(message, vim.log.levels.INFO)

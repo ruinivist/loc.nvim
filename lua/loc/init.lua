@@ -334,7 +334,6 @@ function M.stats()
     added = state.added,
     deleted = state.deleted,
     net = state.added - state.deleted,
-    abs = state.added + state.deleted,
   }
 end
 
@@ -342,7 +341,7 @@ function M.statusline()
   local stats = M.stats()
   local prefix = state.config.statusline_prefix
 
-  return string.format("%s %+d/%d", prefix, stats.net, stats.abs)
+  return string.format("%s %+d", prefix, stats.net)
 end
 
 function M.save()

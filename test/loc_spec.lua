@@ -29,6 +29,6 @@ loc.reset()
 local stats = loc.stats()
 assert_equal(stats.added, 0, "reset added")
 assert_equal(stats.deleted, 0, "reset deleted")
-assert_equal(loc.statusline(), "LOC +0/0", "statusline")
+assert_equal(loc.statusline(), "LOC +0", "statusline")
 
 print("loc.nvim tests passed")
