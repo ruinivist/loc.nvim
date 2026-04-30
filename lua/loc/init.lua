@@ -17,8 +17,7 @@ local state = {
   snapshots = {},
   save_pending = false,
   dirty = false,
-  added = 0,
-  deleted = 0,
+  days = {},
 }
 
 local function data_path()
@@ -43,6 +42,21 @@ local function json_decode(value)
   end
 
   return vim.fn.json_decode(value)
+end
+
+local function today_key()
+  return vim.fn.strftime("%Y-%m-%d")
+end
+
+local function day_stats(date)
+  local day = state.days[date]
+
+  if not day then
+    day = { added = 0, deleted = 0 }
+    state.days[date] = day
+  end
+
+  return day
 end
 
 local function char_count(value)
@@ -150,8 +164,10 @@ local function apply_change(added, deleted)
     return
   end
 
-  state.added = state.added + added
-  state.deleted = state.deleted + deleted
+  local day = day_stats(today_key())
+
+  day.added = day.added + added
+  day.deleted = day.deleted + deleted
   state.dirty = true
 
   vim.schedule(function()
@@ -165,10 +181,7 @@ local function save_now()
   end
 
   local path = data_path()
-  local payload = json_encode({
-    added = state.added,
-    deleted = state.deleted,
-  })
+  local payload = json_encode(state.days)
 
   local ok = pcall(function()
     vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
@@ -219,12 +232,14 @@ local function load_stats()
   end
 
   if not state.config.persist then
+    state.days = {}
     state.loaded = true
     state.loaded_path = path
     return
   end
 
   if vim.fn.filereadable(path) ~= 1 then
+    state.days = {}
     state.loaded = true
     state.loaded_path = path
     return
@@ -234,9 +249,18 @@ local function load_stats()
     return json_decode(table.concat(vim.fn.readfile(path), "\n"))
   end)
 
+  state.days = {}
+  state.dirty = false
+
   if ok and type(parsed) == "table" then
-    state.added = tonumber(parsed.added) or 0
-    state.deleted = tonumber(parsed.deleted) or 0
+    for date, stats in pairs(parsed) do
+      if type(date) == "string" and type(stats) == "table" then
+        state.days[date] = {
+          added = tonumber(stats.added) or 0,
+          deleted = tonumber(stats.deleted) or 0,
+        }
+      end
+    end
   end
 
   state.loaded = true
@@ -320,8 +344,10 @@ end
 function M.reset()
   ensure_setup()
 
-  state.added = 0
-  state.deleted = 0
+  local day = day_stats(today_key())
+
+  day.added = 0
+  day.deleted = 0
   state.dirty = true
   save_now()
   vim.cmd.redrawstatus()
@@ -330,10 +356,12 @@ end
 function M.stats()
   ensure_setup()
 
+  local day = day_stats(today_key())
+
   return {
-    added = state.added,
-    deleted = state.deleted,
-    net = state.added - state.deleted,
+    added = day.added,
+    deleted = day.deleted,
+    net = day.added - day.deleted,
   }
 end
 

@@ -5,13 +5,13 @@
 A tiny Neovim plugin that tracks characters added and deleted while you are in
 insert mode.
 
-It keeps global lifetime totals:
+It keeps daily totals:
 
 - `added`: characters inserted
 - `deleted`: characters removed
 - `net`: `added - deleted`
 
-The statusline text shows `net`, for example:
+The statusline text shows today's `net`, for example:
 
 ```text
 LOC +123
@@ -72,8 +72,8 @@ The plugin defines these commands when it is on your runtimepath:
 
 - `:LocEnable` starts tracking.
 - `:LocDisable` stops tracking.
-- `:LocReset` clears the counters.
-- `:LocStats` prints the current counters.
+- `:LocReset` clears today's counters.
+- `:LocStats` prints today's counters.
 
 Calling `require("loc").setup()` enables tracking by default. Use this if you
 want to configure the plugin but start it manually:
@@ -102,6 +102,20 @@ When `data_path` is `nil`, stats are stored at:
 stdpath("data")/loc.nvim/stats.json
 ```
 
+Stats are stored by local date:
+
+```json
+{
+  "2026-04-30": {
+    "added": 123,
+    "deleted": 45
+  }
+}
+```
+
+With `persist = false`, daily counters stay in memory only for the current
+Neovim process.
+
 ## API
 
 ```lua
@@ -113,7 +127,7 @@ require("loc").statusline()
 require("loc").stats()
 ```
 
-`stats()` returns:
+`stats()` returns today's counters:
 
 ```lua
 {
