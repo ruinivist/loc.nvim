@@ -30,17 +30,6 @@ With `lazy.nvim`:
 }
 ```
 
-For a local checkout:
-
-```lua
-{
-  dir = "/Users/zero/main/loc.nvim",
-  config = function()
-    require("loc").setup()
-  end,
-}
-```
-
 ## Statusline
 
 `loc.nvim` does not overwrite your statusline. Add the exposed function wherever
