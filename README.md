@@ -16,6 +16,9 @@ The statusline text shows today's `net`, for example:
 ```text
 LOC +123
 ```
+## Screens
+
+<img width="694" height="490" alt="image" src="https://github.com/user-attachments/assets/38fad8e6-5480-4f6b-9f0d-066519e3551e" />
 
 ## Install
 
