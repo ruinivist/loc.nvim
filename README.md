@@ -3,7 +3,7 @@
 > Entirely GPT 5.5 generated
 
 A tiny Neovim plugin that tracks characters added and deleted while you are in
-insert mode.
+insert mode, then displays estimated lines of code by dividing characters by 35.
 
 It keeps daily totals:
 
@@ -63,6 +63,7 @@ The plugin defines these commands when it is on your runtimepath:
 - `:LocDisable` stops tracking.
 - `:LocReset` clears today's counters.
 - `:LocStats` prints today's counters.
+- `:LocMetrics` opens a floating 4-week net LOC heatmap.
 
 Calling `require("loc").setup()` enables tracking by default. Use this if you
 want to configure the plugin but start it manually:
@@ -114,6 +115,7 @@ require("loc").reset()
 require("loc").save()
 require("loc").statusline()
 require("loc").stats()
+require("loc").metrics()
 ```
 
 `stats()` returns today's counters:

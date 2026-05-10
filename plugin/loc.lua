@@ -17,7 +17,7 @@ vim.api.nvim_create_user_command("LocReset", function()
 end, { desc = "Reset loc.nvim character counters" })
 
 vim.api.nvim_create_user_command("LocStats", function()
-  local stats = require("loc").stats()
+  local stats = require("loc").display_stats()
   local message = string.format(
     "LOC added=%d deleted=%d net=%+d",
     stats.added,
@@ -26,4 +26,8 @@ vim.api.nvim_create_user_command("LocStats", function()
   )
 
   vim.notify(message, vim.log.levels.INFO)
-end, { desc = "Show loc.nvim character counters" })
+end, { desc = "Show loc.nvim estimated LOC counters" })
+
+vim.api.nvim_create_user_command("LocMetrics", function()
+  require("loc").metrics()
+end, { desc = "Show loc.nvim 30-day LOC metrics heatmap" })
