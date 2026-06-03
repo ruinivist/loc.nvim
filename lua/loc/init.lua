@@ -2,22 +2,19 @@ local M = {}
 
 local defaults = {
   auto_enable = true,
-  persist = true,
   data_path = nil,
-  save_delay_ms = 1000,
+  flush_interval_ms = 10000,
   statusline_prefix = "LOC",
 }
 
 local state = {
   config = nil,
-  loaded = false,
-  loaded_path = nil,
   enabled = false,
   augroup = nil,
   snapshots = {},
-  save_pending = false,
-  dirty = false,
-  days = {},
+  base_days = {},
+  pending_days = {},
+  flush_timer = nil,
   metrics_render = 0,
 }
 
@@ -50,6 +47,9 @@ local metrics_cell_width = 7
 local metrics_cell_height = 3
 local metrics_column_gap = 2
 local metrics_row_gap = 1
+local uv = vim.uv or vim.loop
+local lock_retry_count = 40
+local lock_retry_delay_ms = 50
 
 local function data_path()
   return (state.config and state.config.data_path)
@@ -63,9 +63,194 @@ local function today_key()
   return vim.fn.strftime("%Y-%m-%d")
 end
 
-local function day_stats(date)
-  state.days[date] = state.days[date] or { added = 0, deleted = 0 }
-  return state.days[date]
+local function redraw_statusline()
+  vim.schedule(function()
+    vim.cmd.redrawstatus()
+  end)
+end
+
+local function copy_days(days)
+  local copy = {}
+
+  for date, stats in pairs(days or {}) do
+    if type(date) == "string" and type(stats) == "table" then
+      copy[date] = {
+        added = tonumber(stats.added) or 0,
+        deleted = tonumber(stats.deleted) or 0,
+      }
+    end
+  end
+
+  return copy
+end
+
+local function ensure_day(days, date)
+  days[date] = days[date] or { added = 0, deleted = 0 }
+  return days[date]
+end
+
+local function merged_day_stats(date)
+  local base = state.base_days[date]
+  local pending = state.pending_days[date]
+  local added = (tonumber(base and base.added) or 0) + (tonumber(pending and pending.added) or 0)
+  local deleted = (tonumber(base and base.deleted) or 0) + (tonumber(pending and pending.deleted) or 0)
+
+  return {
+    added = added,
+    deleted = deleted,
+    net = added - deleted,
+  }
+end
+
+local function has_pending_days()
+  return next(state.pending_days) ~= nil
+end
+
+local function merge_days(base_days, pending_days)
+  local merged = copy_days(base_days)
+
+  for date, stats in pairs(pending_days or {}) do
+    local day = ensure_day(merged, date)
+
+    day.added = day.added + (tonumber(stats.added) or 0)
+    day.deleted = day.deleted + (tonumber(stats.deleted) or 0)
+  end
+
+  return merged
+end
+
+local function stats_lock_path(path)
+  return path .. ".lock"
+end
+
+local function lock_info_path(lock_path)
+  return lock_path .. "/info.json"
+end
+
+local function stale_lock_age_seconds()
+  local interval = (state.config and state.config.flush_interval_ms) or defaults.flush_interval_ms
+  return math.max(math.ceil(interval / 1000) * 6, 30)
+end
+
+local function normalize_days(days)
+  return copy_days(days)
+end
+
+local function read_days_from_disk(path)
+  if vim.fn.filereadable(path) ~= 1 then
+    return {}
+  end
+
+  local ok, parsed = pcall(function()
+    return json_decode(table.concat(vim.fn.readfile(path), "\n"))
+  end)
+
+  if not ok or type(parsed) ~= "table" then
+    return {}
+  end
+
+  return normalize_days(parsed)
+end
+
+local function reload_base_days()
+  state.base_days = read_days_from_disk(data_path())
+end
+
+local function write_days_to_disk(path, days)
+  local dir = vim.fn.fnamemodify(path, ":h")
+  local temp_path = string.format("%s.tmp.%d.%d", path, vim.fn.getpid(), os.time())
+  local payload = json_encode(days)
+
+  vim.fn.mkdir(dir, "p")
+  vim.fn.writefile({ payload }, temp_path)
+
+  local ok, err = uv.fs_rename(temp_path, path)
+
+  if not ok then
+    vim.fn.delete(temp_path)
+    error(err or "failed to rename stats file")
+  end
+end
+
+local function read_lock_timestamp(lock_path)
+  local info_path = lock_info_path(lock_path)
+
+  if vim.fn.filereadable(info_path) == 1 then
+    local ok, parsed = pcall(function()
+      return json_decode(table.concat(vim.fn.readfile(info_path), "\n"))
+    end)
+
+    if ok and type(parsed) == "table" and type(parsed.timestamp) == "number" then
+      return parsed.timestamp
+    end
+  end
+
+  local stat = uv.fs_stat(lock_path)
+
+  if stat and stat.mtime and type(stat.mtime.sec) == "number" then
+    return stat.mtime.sec
+  end
+
+  return nil
+end
+
+local function lock_is_stale(lock_path)
+  local timestamp = read_lock_timestamp(lock_path)
+
+  if not timestamp then
+    return false
+  end
+
+  return os.difftime(os.time(), timestamp) >= stale_lock_age_seconds()
+end
+
+local function release_lock(lock_path)
+  pcall(vim.fn.delete, lock_path, "rf")
+end
+
+local function write_lock_metadata(lock_path)
+  local metadata = {
+    pid = vim.fn.getpid(),
+    timestamp = os.time(),
+  }
+
+  pcall(vim.fn.writefile, { json_encode(metadata) }, lock_info_path(lock_path))
+end
+
+local function with_stats_lock(fn)
+  local path = data_path()
+  local dir = vim.fn.fnamemodify(path, ":h")
+  local lock_path = stats_lock_path(path)
+
+  vim.fn.mkdir(dir, "p")
+
+  for _ = 1, lock_retry_count do
+    local ok, created = pcall(vim.fn.mkdir, lock_path)
+
+    if ok and created == 1 then
+      write_lock_metadata(lock_path)
+
+      local success, result, extra = xpcall(function()
+        return fn(path)
+      end, debug.traceback)
+
+      release_lock(lock_path)
+
+      if not success then
+        return false, result
+      end
+
+      return true, result, extra
+    end
+
+    if lock_is_stale(lock_path) then
+      release_lock(lock_path)
+    else
+      vim.wait(lock_retry_delay_ms, function() return false end)
+    end
+  end
+
+  return false, string.format("failed to acquire stats lock: %s", lock_path)
 end
 
 local function char_count(value)
@@ -158,46 +343,11 @@ local function apply_change(added, deleted)
     return
   end
 
-  local day = day_stats(today_key())
+  local day = ensure_day(state.pending_days, today_key())
 
   day.added = day.added + added
   day.deleted = day.deleted + deleted
-  state.dirty = true
-
-  vim.schedule(function()
-    vim.cmd.redrawstatus()
-  end)
-end
-
-local function save_now()
-  if not state.config or not state.config.persist or not state.dirty then
-    return
-  end
-
-  local path = data_path()
-  local payload = json_encode(state.days)
-
-  local ok = pcall(function()
-    vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-    vim.fn.writefile({ payload }, path)
-  end)
-
-  if ok then
-    state.dirty = false
-  end
-end
-
-local function schedule_save()
-  if not state.config or not state.config.persist or state.save_pending then
-    return
-  end
-
-  state.save_pending = true
-
-  vim.defer_fn(function()
-    state.save_pending = false
-    save_now()
-  end, state.config.save_delay_ms)
+  redraw_statusline()
 end
 
 local function update_snapshot(bufnr)
@@ -212,7 +362,6 @@ local function update_snapshot(bufnr)
   if previous then
     local added, deleted = measure_change(previous, current)
     apply_change(added, deleted)
-    schedule_save()
   end
 
   state.snapshots[bufnr] = current
@@ -331,20 +480,7 @@ local function metrics_display_date(epoch)
 end
 
 local function stored_day_stats(date)
-  local day = state.days[date]
-
-  if type(day) ~= "table" then
-    return { added = 0, deleted = 0, net = 0 }
-  end
-
-  local added = tonumber(day.added) or 0
-  local deleted = tonumber(day.deleted) or 0
-
-  return {
-    added = added,
-    deleted = deleted,
-    net = added - deleted,
-  }
+  return merged_day_stats(date)
 end
 
 local function display_day_stats(stats)
@@ -600,47 +736,77 @@ local function apply_metrics_highlights(bufnr, cells, entries, max_abs_net)
   end
 end
 
-local function load_stats()
-  local path = data_path()
-
-  if state.loaded and state.loaded_path == path then
-    return
+local function flush_pending_now()
+  if not state.config or not has_pending_days() then
+    return true
   end
 
-  if not state.config.persist then
-    state.days = {}
-    state.loaded = true
-    state.loaded_path = path
-    return
-  end
+  local flushed = copy_days(state.pending_days)
+  local ok, result = with_stats_lock(function(path)
+    local merged = merge_days(read_days_from_disk(path), flushed)
 
-  if vim.fn.filereadable(path) ~= 1 then
-    state.days = {}
-    state.loaded = true
-    state.loaded_path = path
-    return
-  end
-
-  local ok, parsed = pcall(function()
-    return json_decode(table.concat(vim.fn.readfile(path), "\n"))
+    write_days_to_disk(path, merged)
+    return merged
   end)
 
-  state.days = {}
-  state.dirty = false
-
-  if ok and type(parsed) == "table" then
-    for date, stats in pairs(parsed) do
-      if type(date) == "string" and type(stats) == "table" then
-        state.days[date] = {
-          added = tonumber(stats.added) or 0,
-          deleted = tonumber(stats.deleted) or 0,
-        }
-      end
-    end
+  if not ok then
+    return false, result
   end
 
-  state.loaded = true
-  state.loaded_path = path
+  reload_base_days()
+  state.pending_days = {}
+  redraw_statusline()
+  return true, result
+end
+
+local function periodic_sync()
+  if not state.config then
+    return
+  end
+
+  if has_pending_days() then
+    local ok = flush_pending_now()
+
+    if not ok then
+      return
+    end
+
+    return
+  end
+
+  reload_base_days()
+  redraw_statusline()
+end
+
+local function stop_flush_timer()
+  if not state.flush_timer then
+    return
+  end
+
+  pcall(function()
+    state.flush_timer:stop()
+  end)
+
+  if not state.flush_timer:is_closing() then
+    state.flush_timer:close()
+  end
+
+  state.flush_timer = nil
+end
+
+local function start_flush_timer()
+  stop_flush_timer()
+
+  if not state.enabled or not state.config then
+    return
+  end
+
+  state.flush_timer = assert(uv.new_timer())
+  state.flush_timer:start(
+    state.config.flush_interval_ms,
+    state.config.flush_interval_ms,
+    vim.schedule_wrap(periodic_sync)
+  )
 end
 
 local function ensure_setup()
@@ -653,15 +819,27 @@ end
 
 function M.setup(opts)
   opts = opts or {}
+  local was_enabled = state.enabled
+
+  if state.config then
+    flush_pending_now()
+    stop_flush_timer()
+  end
+
   state.config = vim.tbl_deep_extend("force", defaults, opts)
+  state.config.flush_interval_ms = math.max(1, tonumber(state.config.flush_interval_ms) or defaults.flush_interval_ms)
 
   if opts.data_path == nil then
     state.config.data_path = nil
   end
 
-  load_stats()
+  state.base_days = {}
+  state.pending_days = {}
+  reload_base_days()
 
-  if state.config.auto_enable then
+  if was_enabled then
+    start_flush_timer()
+  elseif state.config.auto_enable then
     M.enable()
   end
 
@@ -697,15 +875,25 @@ function M.enable()
     callback = function(args)
       update_snapshot(args.buf)
       state.snapshots[args.buf] = nil
-      save_now()
     end,
   })
+
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = state.augroup,
+    callback = function()
+      flush_pending_now()
+    end,
+  })
+
+  start_flush_timer()
 end
 
 function M.disable()
   if not state.enabled then
     return
   end
+
+  stop_flush_timer()
 
   if state.augroup then
     pcall(vim.api.nvim_del_augroup_by_id, state.augroup)
@@ -714,31 +902,32 @@ function M.disable()
   state.enabled = false
   state.augroup = nil
   state.snapshots = {}
-  save_now()
+  flush_pending_now()
 end
 
 function M.reset()
   ensure_setup()
 
-  local day = day_stats(today_key())
+  local today = today_key()
+  local ok = with_stats_lock(function(path)
+    local days = read_days_from_disk(path)
 
-  day.added = 0
-  day.deleted = 0
-  state.dirty = true
-  save_now()
+    days[today] = { added = 0, deleted = 0 }
+    write_days_to_disk(path, days)
+  end)
+
+  if ok then
+    reload_base_days()
+    state.pending_days = {}
+  end
+
   vim.cmd.redrawstatus()
 end
 
 function M.stats()
   ensure_setup()
 
-  local day = day_stats(today_key())
-
-  return {
-    added = day.added,
-    deleted = day.deleted,
-    net = day.added - day.deleted,
-  }
+  return merged_day_stats(today_key())
 end
 
 function M.display_stats()
@@ -784,7 +973,7 @@ end
 
 function M.save()
   ensure_setup()
-  save_now()
+  flush_pending_now()
 end
 
 M._measure_change = measure_change

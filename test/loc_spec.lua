@@ -63,7 +63,7 @@ write_json(daily_path, {
   [old_day] = { added = 4, deleted = 1 },
 })
 
-loc.setup({ auto_enable = false, data_path = daily_path, save_delay_ms = 1 })
+loc.setup({ auto_enable = false, data_path = daily_path, flush_interval_ms = 10000 })
 
 local loaded_stats = loc.stats()
 assert_equal(loaded_stats.added, 7, "loaded daily added")
@@ -85,7 +85,7 @@ assert_equal(daily[old_day].added, 4, "reset preserves old day added")
 assert_equal(daily[old_day].deleted, 1, "reset preserves old day deleted")
 
 local change_path = vim.fn.tempname()
-loc.setup({ auto_enable = false, data_path = change_path, save_delay_ms = 1 })
+loc.setup({ auto_enable = false, data_path = change_path, flush_interval_ms = 10000 })
 loc.enable()
 
 local bufnr = vim.api.nvim_create_buf(false, true)
@@ -161,7 +161,7 @@ write_json(metrics_path, {
   ["2026-05-10"] = { added = 350, deleted = 0 },
 })
 
-loc.setup({ auto_enable = false, data_path = metrics_path, save_delay_ms = 1 })
+loc.setup({ auto_enable = false, data_path = metrics_path, flush_interval_ms = 10000 })
 
 local entries, column_count, max_abs_net, total_net = loc._metrics_entries(metrics_epoch)
 
@@ -181,6 +181,16 @@ assert_equal(entries[28].loc_net, 0, "metrics future date loc net is zero")
 assert_equal(max_abs_net, 10, "metrics max abs net")
 assert_equal(total_net, 14, "metrics total net")
 
+local render_path = vim.fn.tempname()
+local render_dates = loc._metrics_dates()
+write_json(render_path, {
+  [render_dates[1].date] = { added = 245, deleted = 0 },
+  [render_dates[10].date] = { added = 0, deleted = 105 },
+  [today] = { added = 350, deleted = 0 },
+})
+
+loc.setup({ auto_enable = false, data_path = render_path, flush_interval_ms = 10000 })
+
 local render = loc.metrics()
 assert_equal(vim.api.nvim_win_is_valid(render.winid), true, "metrics window is valid")
 assert_equal(vim.api.nvim_buf_is_valid(render.bufnr), true, "metrics buffer is valid")
@@ -192,9 +202,9 @@ assert_equal(metrics_lines[2]:match("LOC metrics") ~= nil, true, "metrics title"
 assert_equal(metrics_lines[#metrics_lines - 1]:match("4%-week net: %+14") ~= nil, true, "metrics summary")
 assert_equal(#metrics_lines, 21, "metrics renders transposed three-line week rows with row gaps and outer padding")
 assert_equal(rendered:match("%+7") ~= nil, true, "metrics renders net value")
-assert_equal(rendered:match("04/19") ~= nil, true, "metrics renders date label")
-assert_equal(rendered:match("04/20") ~= nil, true, "metrics renders zero tile date label")
-assert_equal(rendered:match("05/16") ~= nil, true, "metrics renders future date label")
+assert_equal(rendered:match(loc._metrics_display_date(render_dates[1].epoch)) ~= nil, true, "metrics renders date label")
+assert_equal(rendered:match(loc._metrics_display_date(render_dates[2].epoch)) ~= nil, true, "metrics renders zero tile date label")
+assert_equal(rendered:match(loc._metrics_display_date(render_dates[28].epoch)) ~= nil, true, "metrics renders future date label")
 assert_equal(rendered:match("Sun") == nil, true, "metrics omits weekday labels")
 assert_equal(vim.wo[render.winid].winhl:match("LocMetricsNormal") ~= nil, true, "metrics window uses custom normal highlight")
 assert_equal(vim.wo[render.winid].winhl:match("FloatBorder") == nil, true, "metrics window does not set a border highlight")

@@ -1,7 +1,5 @@
 # loc.nvim
 
-> Entirely GPT 5.5 generated
-
 A tiny Neovim plugin that tracks characters added and deleted while you are in
 insert mode, then displays estimated lines of code by dividing characters by 35.
 
@@ -82,9 +80,8 @@ Defaults:
 ```lua
 require("loc").setup({
   auto_enable = true,
-  persist = true,
   data_path = nil,
-  save_delay_ms = 1000,
+  flush_interval_ms = 10000,
   statusline_prefix = "LOC",
 })
 ```
@@ -106,8 +103,7 @@ Stats are stored by local date:
 }
 ```
 
-With `persist = false`, daily counters stay in memory only for the current
-Neovim process.
+Local edits are applied immediately in the UI, then flushed into `stats.json` every `flush_interval_ms`.
 
 ## API
 
@@ -120,6 +116,8 @@ require("loc").statusline()
 require("loc").stats()
 require("loc").metrics()
 ```
+
+`save()` flushes this process's pending deltas immediately.
 
 `stats()` returns today's counters:
 
